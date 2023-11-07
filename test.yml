@@ -1,0 +1,73 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildJob
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
+
+    - script: |
+        npm install -g @angular/cli
+        npm install
+      displayName: 'npm install'
+      workingDirectory: $(Build.SourcesDirectory)
+
+    - script: |
+        ng build --configuration production
+      displayName: 'Build Angular for production'
+      workingDirectory: $(Build.SourcesDirectory)
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.SourcesDirectory)/dist' # Ensure this is the path to your 'dist' folder after the build
+        ArtifactName: 'webapp'
+        publishLocation: 'Container'
+      displayName: 'Publish Artifact: webapp'
+
+- stage: Deploy
+  jobs:
+  - deployment: DeployWebApp
+    displayName: 'Deploy Angular App'
+    environment: 'ubuntu_server'
+    pool:
+      name: sonarqube-local
+      vmImage: 'ubuntu-latest'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: webapp
+
+          - script: |
+              sudo apt-get update
+              sudo apt-get install -y nginx
+              sudo systemctl start nginx
+            displayName: 'Install and start Nginx'
+
+          - script: |
+              sudo rm -rf /usr/share/nginx/html/*
+              sudo cp -r $(Pipeline.Workspace)/webapp/* /usr/share/nginx/html/
+              # Ensure proper permissions
+              sudo chown -R www-data:www-data /usr/share/nginx/html
+              sudo systemctl reload nginx
+            displayName: 'Deploy Angular App to Nginx'
+
+          - script: |
+              STATUS_CODE=$(curl -o /dev/null -s -w "%{http_code}\n" http://localhost)
+              if [ "$STATUS_CODE" -ne 200 ]; then
+                echo "Health check failed!"
+                exit 1
+              fi
+            displayName: 'Health Check'
+
+          - script: |
+              echo "Access the Angular app at http://$(hostname -I | awk '{print $1}'):80"
+            displayName: 'Display App URL'
